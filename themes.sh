@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="$HOME/Sakura"
-MANDATORY_DIR="$BASE_DIR/MandatoryPackages"
-SETTINGS_DIR="$BASE_DIR/Settings"
-THEME_FILE="$SETTINGS_DIR/theme.sh"
+BASE="$HOME/Sakura"
+MANDATORY="$BASE/MandatoryPackages"
+SETTINGS="$MANDATORY/Settings"
+THEME="$SETTINGS/theme.sh"
 
-mkdir -p "$MANDATORY_DIR" "$SETTINGS_DIR"
+mkdir -p "$SETTINGS"
 
-if [ ! -f "$THEME_FILE" ]; then
-cat > "$THEME_FILE" <<'EOF'
+if [ ! -f "$THEME" ]; then
+cat > "$THEME" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -27,5 +27,5 @@ qdbus org.kde.KWin /KWin reconfigure || true
 kquitapp5 plasmashell || true
 kstart5 plasmashell || true
 EOF
-chmod +x "$THEME_FILE"
+chmod +x "$THEME"
 fi
