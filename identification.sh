@@ -2,30 +2,21 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Run with sudo."
+  echo "Please run this script with sudo."
   exit 1
 fi
 
-REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
-if [ -z "${REAL_HOME:-}" ]; then
-  REAL_HOME="/home/$REAL_USER"
-fi
-
-NIXOS_DIR="/etc/nixos"
-SAKURA_DIR="$NIXOS_DIR/sakura"
+CONFIG="/etc/nixos/configuration.nix"
+SAKURA_DIR="/etc/nixos/sakura"
 SYSTEM_NIX="$SAKURA_DIR/system.nix"
-HOME_NIX="$SAKURA_DIR/home.nix"
-CONFIG_NIX="$NIXOS_DIR/configuration.nix"
+BACKUP="/etc/nixos/configuration.nix.bak.$(date +%s)"
 
 mkdir -p "$SAKURA_DIR"
 
-echo "Prefetching Sakura assets..."
-BACKGROUND_HASH="$(nix-prefetch-url https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png)"
-LOGO_HASH="$(nix-prefetch-url https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/logo.png)"
-WHITELOGO_HASH="$(nix-prefetch-url https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/whitelogo.png)"
+echo "Backing up configuration.nix to $BACKUP"
+cp "$CONFIG" "$BACKUP"
 
-echo "Writing $SYSTEM_NIX ..."
+echo "Writing Sakura system module..."
 cat > "$SYSTEM_NIX" <<'EOF'
 { config, pkgs, lib, ... }:
 
@@ -66,116 +57,85 @@ cat > "$SYSTEM_NIX" <<'EOF'
 }
 EOF
 
-echo "Writing $HOME_NIX ..."
-cat > "$HOME_NIX" <<EOF
-{ config, pkgs, lib, ... }:
+echo "Fixing configuration.nix imports..."
+python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
 
-{
-  home.file."Sakura/MandatoryPackages/Identification/Assets/background.png".source = pkgs.fetchurl {
-    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png";
-    sha256 = "$BACKGROUND_HASH";
-  };
+config_path = Path("/etc/nixos/configuration.nix")
+text = config_path.read_text()
 
-  home.file."Sakura/MandatoryPackages/Identification/Assets/logo.png".source = pkgs.fetchurl {
-    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/logo.png";
-    sha256 = "$LOGO_HASH";
-  };
+target = "./sakura/system.nix"
 
-  home.file."Sakura/MandatoryPackages/Identification/Assets/whitelogo.png".source = pkgs.fetchurl {
-    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/whitelogo.png";
-    sha256 = "$WHITELOGO_HASH";
-  };
+# Find all imports blocks
+pattern = re.compile(r'(^[ \t]*imports\s*=\s*\[.*?^\s*\];)', re.MULTILINE | re.DOTALL)
+matches = list(pattern.finditer(text))
 
-  home.file.".config/fastfetch/ascii.txt".text = ''
-                                           
-                                 @@% #     
-                                @# ##*     
-                  @-#@@ @@       ###       
-                 @@ ##% @@@        %####*  
-                @@@ @@@ @@@@       *.#+*%  
-          @@@@@ @ @ @@@ @@:@@@@@@@         
-        @+#    @@@* @@@. #@@@ %%   @       
-       @-=- @@      @@@.=- .:   .@#@       
-       @.#%@@@@@@@=@@.#@@@@@@@@@@##%@      
-        @%*###%@@@@=@.@@:@@@%####*+@       
- *+*+:#   @@#*@  #  @%+-  :@@%+=@@         
-   #%##:   @@ #..@@ @@@ @@@  .#@           
-           @.:@@@@@ %%% @@@@@@  @          
-      @@.* %@@@@@@@ #@@ @@@@@@@@@          
-     @ ###  @@#@@@@@@  @@@@@@ @@           
-               @@@        @@@              
-  '';
+if not matches:
+    print("No imports block found in configuration.nix")
+    print("Please add this manually inside the main config:")
+    print("  imports = [ ./sakura/system.nix ];")
+    sys.exit(1)
 
-  home.file.".config/fastfetch/config.jsonc".text = ''
-    {
-      "logo": {
-        "type": "file",
-        "source": "\${config.home.homeDirectory}/.config/fastfetch/ascii.txt"
-      },
-      "display": {
-        "separator": "  "
-      },
-      "modules": [
-        "title",
-        "separator",
-        "os",
-        "host",
-        "kernel",
-        "uptime",
-        "packages",
-        "shell",
-        "de",
-        "wm",
-        "terminal",
-        "cpu",
-        "gpu",
-        "memory",
-        "disk",
-        "localip",
-        "battery",
-        "locale"
-      ]
-    }
-  '';
+# Keep the first imports block, remove later duplicate imports blocks that only existed from earlier broken script runs
+first = matches[0]
+first_block = first.group(0)
 
-  xsession.initExtra = ''
-    \${pkgs.feh}/bin/feh --bg-fill \${config.home.homeDirectory}/Sakura/MandatoryPackages/Identification/Assets/background.png &
-  '';
-}
-EOF
+# Ensure target import is inside first block
+if target not in first_block:
+    # Put it before closing ];
+    first_block = re.sub(r'(^\s*\];)', f'    {target}\n\\1', first_block, flags=re.MULTILINE)
 
-if ! grep -q './sakura/system.nix' "$CONFIG_NIX"; then
-  echo "Adding Sakura system import..."
-  sed -i '/imports = \[/a\    ./sakura/system.nix' "$CONFIG_NIX"
-fi
+new_text = text[:first.start()] + first_block + text[first.end():]
+
+# Remove all later imports blocks entirely
+later_matches = list(pattern.finditer(new_text))
+if len(later_matches) > 1:
+    pieces = []
+    last_end = 0
+    for i, m in enumerate(later_matches):
+        if i == 0:
+            continue
+        pieces.append(new_text[last_end:m.start()])
+        last_end = m.end()
+    pieces.append(new_text[last_end:])
+    # rebuild with first block retained
+    first_match = later_matches[0]
+    body = ''.join(pieces)
+    # easier: regenerate from scratch
+    text2 = new_text
+    later_matches2 = list(pattern.finditer(text2))
+    for m in reversed(later_matches2[1:]):
+        text2 = text2[:m.start()] + text2[m.end():]
+    new_text = text2
+
+# Make sure target still exists once
+final_matches = list(pattern.finditer(new_text))
+fb = final_matches[0].group(0)
+if fb.count(target) == 0:
+    fb = re.sub(r'(^\s*\];)', f'    {target}\n\\1', fb, flags=re.MULTILINE)
+elif fb.count(target) > 1:
+    lines = fb.splitlines()
+    seen = 0
+    cleaned = []
+    for line in lines:
+        if target in line:
+            seen += 1
+            if seen > 1:
+                continue
+        cleaned.append(line)
+    fb = "\n".join(cleaned)
+
+new_text = new_text[:final_matches[0].start()] + fb + new_text[final_matches[0].end():]
+
+config_path.write_text(new_text)
+PY
 
 echo "Rebuilding NixOS..."
 nixos-rebuild switch
 
-if command -v home-manager >/dev/null 2>&1; then
-  HM_CONFIG_DIR="$REAL_HOME/.config/home-manager"
-  mkdir -p "$HM_CONFIG_DIR"
-
-  if [ ! -f "$HM_CONFIG_DIR/home.nix" ]; then
-    cat > "$HM_CONFIG_DIR/home.nix" <<EOF
-{ config, pkgs, lib, ... }:
-{
-  imports = [ /etc/nixos/sakura/home.nix ];
-  home.username = "$REAL_USER";
-  home.homeDirectory = "$REAL_HOME";
-  home.stateVersion = "25.11";
-}
-EOF
-    chown -R "$REAL_USER":"$(id -gn "$REAL_USER" 2>/dev/null || echo users)" "$HM_CONFIG_DIR"
-  fi
-
-  echo "Applying Home Manager..."
-  sudo -u "$REAL_USER" home-manager switch
-else
-  echo "Home Manager is not installed."
-  echo "System module applied."
-  echo "User module written to: $HOME_NIX"
-  echo "Import it later through Home Manager."
-fi
-
+echo
 echo "Done."
+echo "Sakura module: $SYSTEM_NIX"
+echo "Backup: $BACKUP"
