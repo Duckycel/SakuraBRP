@@ -9,15 +9,32 @@ fi
 CONFIG="/etc/nixos/configuration.nix"
 SAKURA_DIR="/etc/nixos/sakura"
 SYSTEM_NIX="$SAKURA_DIR/system.nix"
-BACKUP="/etc/nixos/configuration.nix.bak.$(date +%s)"
+TIMESTAMP="$(date +%s)"
+BACKUP="/etc/nixos/configuration.nix.bak.$TIMESTAMP"
+TMP="$(mktemp)"
+TMP2="$(mktemp)"
 
 mkdir -p "$SAKURA_DIR"
 
-echo "Backing up configuration.nix"
-cp "$CONFIG" "$BACKUP"
+validate_config() {
+  nix-instantiate --parse "$CONFIG" >/dev/null 2>&1
+}
+
+restore_latest_backup() {
+  local latest
+  latest="$(ls -1t /etc/nixos/configuration.nix.bak.* 2>/dev/null | head -n 1 || true)"
+  if [ -n "$latest" ] && [ -f "$latest" ]; then
+    echo "Current configuration.nix is broken."
+    echo "Restoring latest backup: $latest"
+    cp "$latest" "$CONFIG"
+  else
+    echo "Current configuration.nix is broken, and no backup was found."
+    echo "Please fix /etc/nixos/configuration.nix manually first."
+    exit 1
+  fi
+}
 
 echo "Writing Sakura system module..."
-
 cat > "$SYSTEM_NIX" <<'EOF'
 { config, pkgs, lib, ... }:
 
@@ -58,26 +75,84 @@ cat > "$SYSTEM_NIX" <<'EOF'
 }
 EOF
 
-echo "Fixing imports safely..."
+echo "Checking existing configuration.nix..."
+if ! validate_config; then
+  restore_latest_backup
+fi
 
-# remove duplicate sakura imports blocks
-sed -i '/imports = \[/,/];/ {
-  /sakura\/system.nix/ {
-    :a
-    N
-    /];/!ba
-    d
+if ! validate_config; then
+  echo "configuration.nix is still invalid after restore."
+  echo "Please repair it manually, then rerun this script."
+  exit 1
+fi
+
+echo "Backing up current configuration.nix to $BACKUP"
+cp "$CONFIG" "$BACKUP"
+
+echo "Cleaning duplicate Sakura import lines..."
+awk '
+{
+  if ($0 ~ /[.]\/sakura\/system[.]nix/) next
+  print
+}
+' "$CONFIG" > "$TMP"
+mv "$TMP" "$CONFIG"
+
+echo "Inserting Sakura import into the main imports block..."
+awk '
+BEGIN {
+  in_imports = 0
+  inserted = 0
+}
+{
+  if ($0 ~ /^[[:space:]]*imports[[:space:]]*=/) {
+    in_imports = 1
+    print
+    next
   }
-}' "$CONFIG"
 
-# add sakura/system.nix under hardware import if missing
-if ! grep -q "./sakura/system.nix" "$CONFIG"; then
-  sed -i '/hardware-configuration.nix/a\      ./sakura/system.nix' "$CONFIG"
+  if (in_imports == 1) {
+    if ($0 ~ /^[[:space:]]*\];/) {
+      print "      ./sakura/system.nix"
+      print
+      inserted = 1
+      in_imports = 0
+      next
+    }
+    print
+    next
+  }
+
+  print
+}
+END {
+  if (inserted == 0) {
+    exit 2
+  }
+}
+' "$CONFIG" > "$TMP2" || {
+  rm -f "$TMP" "$TMP2"
+  echo "Could not find an imports block in configuration.nix."
+  echo "Add this manually inside your existing imports list:"
+  echo "  ./sakura/system.nix"
+  exit 1
+}
+mv "$TMP2" "$CONFIG"
+
+echo "Validating edited configuration.nix..."
+if ! validate_config; then
+  echo "Edited configuration.nix is invalid. Restoring backup."
+  cp "$BACKUP" "$CONFIG"
+  rm -f "$TMP" "$TMP2"
+  exit 1
 fi
 
 echo "Rebuilding NixOS..."
 nixos-rebuild switch
 
+rm -f "$TMP" "$TMP2"
+
 echo
-echo "SakuraOS bootstrap complete."
-echo "Backup saved to $BACKUP"
+echo "Done."
+echo "Sakura system module written to: $SYSTEM_NIX"
+echo "Backup saved to: $BACKUP"
