@@ -72,15 +72,17 @@ ensure_fastfetch_permanent() {
 }
 EOF
 
-    if ! grep -q 'sakura-fastfetch.nix' "$NIXOS_CONFIG"; then
+    if grep -q 'sakura-fastfetch.nix' "$NIXOS_CONFIG"; then
+        echo "sakura-fastfetch.nix is already imported."
+    else
         if grep -q 'imports = \[' "$NIXOS_CONFIG"; then
             sed -i '/imports = \[/a\    ./sakura-fastfetch.nix' "$NIXOS_CONFIG"
+            echo "Added ./sakura-fastfetch.nix to existing imports block."
         else
-            sed -i '/{[[:space:]]*$/a\
-  imports = [\
-    ./sakura-fastfetch.nix\
-  ];\
-' "$NIXOS_CONFIG"
+            echo "No imports block found in configuration.nix."
+            echo "Add this manually inside your existing config:"
+            echo "  imports = [ ./sakura-fastfetch.nix ];"
+            return
         fi
     fi
 
