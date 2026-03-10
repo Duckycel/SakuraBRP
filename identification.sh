@@ -2,15 +2,23 @@
 
 set -euo pipefail
 
-USER_NAME="$(whoami)"
-HOME_DIR="$HOME"
-SAKURA_DIR="$HOME_DIR/Sakura"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run this script with sudo."
+  exit 1
+fi
+
+REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo root)}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+if [ -z "${REAL_HOME:-}" ]; then
+  REAL_HOME="/home/$REAL_USER"
+fi
+
+SAKURA_DIR="$REAL_HOME/Sakura"
 IDENT_DIR="$SAKURA_DIR/MandatoryPackages/Identification"
 ASSETS_DIR="$IDENT_DIR/Assets"
-FASTFETCH_DIR="$HOME_DIR/.config/fastfetch"
+FASTFETCH_DIR="$REAL_HOME/.config/fastfetch"
 FASTFETCH_CONFIG="$FASTFETCH_DIR/config.jsonc"
 ASCII_FILE="$FASTFETCH_DIR/ascii.txt"
-NIXOS_CONFIG="/etc/nixos/configuration.nix"
 
 BACKGROUND_FILE="$ASSETS_DIR/background.png"
 BOOT_LOGO_FILE="$ASSETS_DIR/logo.png"
@@ -20,103 +28,72 @@ BACKGROUND_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/backgr
 BOOT_LOGO_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/logo.png"
 WHITE_LOGO_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/whitelogo.png"
 
-echo "Setting up Sakura OS identification..."
+NIXOS_CONFIG="/etc/nixos/configuration.nix"
+SAKURA_NIX="/etc/nixos/sakura-packages.nix"
 
-mkdir -p "$IDENT_DIR"
-mkdir -p "$ASSETS_DIR"
-mkdir -p "$FASTFETCH_DIR"
+mkdir -p "$IDENT_DIR" "$ASSETS_DIR" "$FASTFETCH_DIR"
 
 download_file() {
-    local url="$1"
-    local out="$2"
+  local url="$1"
+  local out="$2"
 
-    echo "Downloading $(basename "$out")..."
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$out" "$url"
-    elif command -v curl >/dev/null 2>&1; then
-        curl -L "$url" -o "$out"
-    else
-        echo "Neither wget nor curl is installed."
-        echo "Run this script with: nix-shell -p wget --run \"wget -O identification.sh <url> && chmod +x identification.sh && sudo ./identification.sh\""
-        exit 1
-    fi
+  echo "Downloading $(basename "$out")..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -L "$url" -o "$out"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$out" "$url"
+  else
+    echo "Neither curl nor wget is available."
+    echo "Run the installer using nix-shell -p curl --run ..."
+    exit 1
+  fi
 }
 
-ensure_fastfetch_persistent() {
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "Not running as root, cannot make fastfetch permanent."
-        return
-    fi
+ensure_fastfetch_permanent() {
+  echo "Creating permanent Sakura package module..."
 
-    if [ ! -f "$NIXOS_CONFIG" ]; then
-        echo "Could not find $NIXOS_CONFIG"
-        return
-    fi
-
-    echo "Ensuring fastfetch is installed permanently through configuration.nix..."
-
-    if grep -q 'fastfetch' "$NIXOS_CONFIG"; then
-        echo "fastfetch already appears in configuration.nix"
-    else
-        python3 <<'PY'
-from pathlib import Path
-path = Path("/etc/nixos/configuration.nix")
-text = path.read_text()
-
-if "environment.systemPackages = with pkgs; [" in text:
-    text = text.replace(
-        "environment.systemPackages = with pkgs; [",
-        "environment.systemPackages = with pkgs; [\n    fastfetch",
-        1
-    )
-else:
-    block = """
-
-  # SakuraOS mandatory packages
+  cat > "$SAKURA_NIX" <<'EOF'
+{ pkgs, ... }:
+{
   environment.systemPackages = with pkgs; [
     fastfetch
   ];
-"""
-    if text.rstrip().endswith("}"):
-        text = text.rstrip()[:-1] + block + "\n}\n"
-    else:
-        text += block
+}
+EOF
 
-path.write_text(text)
-PY
-        echo "Added fastfetch to configuration.nix"
-    fi
+  if ! grep -q 'sakura-packages.nix' "$NIXOS_CONFIG"; then
+    echo "Adding sakura-packages.nix import to configuration.nix..."
 
-    echo "Running nixos-rebuild switch..."
-    nixos-rebuild switch
+    awk '
+      BEGIN { added=0 }
+      /^\s*imports\s*=\s*\[/ && added==0 {
+        print
+        print "    ./sakura-packages.nix"
+        added=1
+        next
+      }
+      { print }
+      END {
+        if (added==0) {
+          print ""
+          print "  imports = ["
+          print "    ./sakura-packages.nix"
+          print "  ];"
+        }
+      }
+    ' "$NIXOS_CONFIG" > /tmp/configuration.nix.sakura
+
+    mv /tmp/configuration.nix.sakura "$NIXOS_CONFIG"
+  else
+    echo "Import already present."
+  fi
+
+  echo "Rebuilding NixOS so fastfetch is installed permanently..."
+  nixos-rebuild switch
 }
 
-install_temp_pkg_if_missing() {
-    local pkg="$1"
-    if ! command -v "$pkg" >/dev/null 2>&1; then
-        echo "$pkg not found."
-        echo "Trying temporary install with nix-env..."
-        nix-env -iA "nixpkgs.$pkg" || true
-    fi
-}
-
-install_temp_pkg_if_missing curl
-install_temp_pkg_if_missing wget
-install_temp_pkg_if_missing feh
-install_temp_pkg_if_missing fastfetch
-
-if [ "$(id -u)" -eq 0 ]; then
-    ensure_fastfetch_persistent
-else
-    echo "Tip: run with sudo so fastfetch can be added permanently to configuration.nix"
-fi
-
-download_file "$BACKGROUND_URL" "$BACKGROUND_FILE"
-download_file "$BOOT_LOGO_URL" "$BOOT_LOGO_FILE"
-download_file "$WHITE_LOGO_URL" "$WHITE_LOGO_FILE"
-
-echo "Writing Fastfetch ASCII..."
-cat > "$ASCII_FILE" <<'EOF'
+write_fastfetch_files() {
+  cat > "$ASCII_FILE" <<'EOF'
                                            
                                  @@% #     
                                 @# ##*     
@@ -136,8 +113,7 @@ cat > "$ASCII_FILE" <<'EOF'
                @@@        @@@              
 EOF
 
-echo "Writing Fastfetch config..."
-cat > "$FASTFETCH_CONFIG" <<EOF
+  cat > "$FASTFETCH_CONFIG" <<EOF
 {
   "logo": {
     "type": "file",
@@ -169,17 +145,15 @@ cat > "$FASTFETCH_CONFIG" <<EOF
 }
 EOF
 
-echo "Applying wallpaper..."
-if command -v feh >/dev/null 2>&1; then
-    feh --bg-fill "$BACKGROUND_FILE" || true
-fi
+  chown -R "$REAL_USER":"$(id -gn "$REAL_USER" 2>/dev/null || echo users)" "$FASTFETCH_DIR"
+}
 
-echo "Writing /etc/os-release..."
-if [ "$(id -u)" -eq 0 ]; then
-    rm -f /etc/os-release 2>/dev/null || true
+write_os_release() {
+  echo "Trying to write /etc/os-release..."
+  rm -f /etc/os-release 2>/dev/null || true
 
-    if touch /etc/os-release 2>/dev/null; then
-        cat > /etc/os-release <<'EOF'
+  if touch /etc/os-release 2>/dev/null; then
+    cat > /etc/os-release <<'EOF'
 ANSI_COLOR="0;35"
 BUG_REPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
 BUILD_ID="0.1"
@@ -203,22 +177,32 @@ VERSION="0.1 RELEASE (Elite)"
 VERSION_CODENAME="Elite"
 VERSION_ID="0.1"
 EOF
-        echo "Wrote /etc/os-release"
-    else
-        echo "Could not write /etc/os-release on this NixOS setup, skipping."
-    fi
-else
-    echo "Not running as root, so /etc/os-release was not changed."
-fi
+    echo "/etc/os-release written."
+  else
+    echo "Could not write /etc/os-release on this NixOS setup, skipping."
+  fi
+}
+
+echo "Downloading Sakura assets..."
+download_file "$BACKGROUND_URL" "$BACKGROUND_FILE"
+download_file "$BOOT_LOGO_URL" "$BOOT_LOGO_FILE"
+download_file "$WHITE_LOGO_URL" "$WHITE_LOGO_FILE"
+chown -R "$REAL_USER":"$(id -gn "$REAL_USER" 2>/dev/null || echo users)" "$SAKURA_DIR"
+
+ensure_fastfetch_permanent
+write_fastfetch_files
+write_os_release
 
 echo "Setting hostname..."
-if [ "$(id -u)" -eq 0 ]; then
-    hostnamectl set-hostname sakura || true
+hostnamectl set-hostname sakura || true
+
+echo "Applying wallpaper if feh exists..."
+if command -v feh >/dev/null 2>&1; then
+  sudo -u "$REAL_USER" feh --bg-fill "$BACKGROUND_FILE" || true
+else
+  echo "feh is not installed, skipping wallpaper apply."
 fi
 
 echo
 echo "Done."
-echo "Background: $BACKGROUND_FILE"
-echo "Boot logo:  $BOOT_LOGO_FILE"
-echo "White logo: $WHITE_LOGO_FILE"
-echo "Fastfetch:  $FASTFETCH_CONFIG"
+echo "Fastfetch is now configured and installed permanently through NixOS."
