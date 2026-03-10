@@ -20,6 +20,7 @@ ASSETS_DIR="$IDENT_DIR/Assets"
 FASTFETCH_DIR="$REAL_HOME/.config/fastfetch"
 FASTFETCH_CONFIG="$FASTFETCH_DIR/config.jsonc"
 ASCII_FILE="$FASTFETCH_DIR/ascii.txt"
+NIXOS_CONFIG="/etc/nixos/configuration.nix"
 
 BACKGROUND_FILE="$ASSETS_DIR/background.png"
 BOOT_LOGO_FILE="$ASSETS_DIR/logo.png"
@@ -28,9 +29,6 @@ WHITE_LOGO_FILE="$ASSETS_DIR/whitelogo.png"
 BACKGROUND_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png"
 BOOT_LOGO_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/logo.png"
 WHITE_LOGO_URL="https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/whitelogo.png"
-
-NIXOS_CONFIG="/etc/nixos/configuration.nix"
-SAKURA_NIX="/etc/nixos/sakura-fastfetch.nix"
 
 echo "Setting up Sakura OS identification..."
 
@@ -49,41 +47,35 @@ download_file() {
         wget -O "$out" "$url"
     else
         echo "Neither curl nor wget is installed."
-        echo "Run the installer with nix-shell -p curl"
         exit 1
     fi
 }
 
 ensure_fastfetch_permanent() {
-    echo "Ensuring fastfetch is installed permanently..."
+    echo "Ensuring fastfetch is installed permanently in configuration.nix..."
 
     if [ ! -f "$NIXOS_CONFIG" ]; then
         echo "Could not find $NIXOS_CONFIG"
         return
     fi
 
-    cat > "$SAKURA_NIX" <<'EOF'
-{ pkgs, ... }:
+    if grep -qE '^[[:space:]]*fastfetch([[:space:]]|$)' "$NIXOS_CONFIG"; then
+        echo "fastfetch already appears to be in configuration.nix"
+        return
+    fi
 
-{
-  environment.systemPackages = with pkgs; [
-    fastfetch
-  ];
-}
-EOF
-
-    if grep -q 'sakura-fastfetch.nix' "$NIXOS_CONFIG"; then
-        echo "sakura-fastfetch.nix is already imported."
+    if grep -q 'environment.systemPackages = with pkgs; \[' "$NIXOS_CONFIG"; then
+        sed -i '/environment.systemPackages = with pkgs; \[/a\    fastfetch' "$NIXOS_CONFIG"
+        echo "Added fastfetch to environment.systemPackages"
     else
-        if grep -q 'imports = \[' "$NIXOS_CONFIG"; then
-            sed -i '/imports = \[/a\    ./sakura-fastfetch.nix' "$NIXOS_CONFIG"
-            echo "Added ./sakura-fastfetch.nix to existing imports block."
-        else
-            echo "No imports block found in configuration.nix."
-            echo "Add this manually inside your existing config:"
-            echo "  imports = [ ./sakura-fastfetch.nix ];"
-            return
-        fi
+        echo "Could not find this exact block in configuration.nix:"
+        echo "environment.systemPackages = with pkgs; ["
+        echo
+        echo "Add this manually:"
+        echo "environment.systemPackages = with pkgs; ["
+        echo "  fastfetch"
+        echo "];"
+        return
     fi
 
     echo "Running nixos-rebuild switch..."
@@ -211,7 +203,7 @@ apply_wallpaper_if_possible
 
 echo
 echo "Done."
-echo "Fastfetch is installed permanently through NixOS."
+echo "Fastfetch should now be permanent through configuration.nix."
 echo "Background: $BACKGROUND_FILE"
 echo "Boot logo:  $BOOT_LOGO_FILE"
 echo "White logo: $WHITE_LOGO_FILE"
