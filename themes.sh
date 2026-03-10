@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v nix-env >/dev/null 2>&1; then
+    echo "This script is for NixOS or systems with nix-env installed."
+    exit 1
+fi
+
+nix-env -iA \
+    nixos.kdePackages.kconfig \
+    nixos.kdePackages.kdbusaddons \
+    nixos.kdePackages.plasma-workspace \
+    nixos.kdePackages.kwin \
+    nixos.qt6.qttools
+
 BASE="$HOME/Sakura"
 MANDATORY="$BASE/MandatoryPackages"
 SETTINGS="$MANDATORY/Settings"
@@ -8,24 +20,37 @@ THEME="$SETTINGS/theme.sh"
 
 mkdir -p "$SETTINGS"
 
-if [ ! -f "$THEME" ]; then
 cat > "$THEME" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-kwriteconfig5 --file kdeglobals --group General --key ColorScheme "BreezeDark"
-kwriteconfig5 --file kdeglobals --group KDE --key widgetStyle "Breeze"
-kwriteconfig5 --file kdeglobals --group Icons --key Theme "breeze-dark"
-kwriteconfig5 --file plasmarc --group Theme --key name "default"
-kwriteconfig5 --file kwinrc --group org.kde.kdecoration2 --key theme "Breeze"
-kwriteconfig5 --file kwinrc --group Plugins --key blurEnabled true
-kwriteconfig5 --file kwinrc --group Plugins --key translucencyEnabled true
-kwriteconfig5 --file kwinrc --group Compositing --key Enabled true
-kwriteconfig5 --file kwinrc --group Compositing --key Backend OpenGL
-kwriteconfig5 --file kwinrc --group Compositing --key GLCore true
-qdbus org.kde.KWin /KWin reconfigure || true
-kquitapp5 plasmashell || true
-kstart5 plasmashell || true
-EOF
-chmod +x "$THEME"
+if command -v kwriteconfig6 >/dev/null 2>&1; then
+    KWRITE="kwriteconfig6"
+elif command -v kwriteconfig5 >/dev/null 2>&1; then
+    KWRITE="kwriteconfig5"
+else
+    echo "kwriteconfig not found"
+    exit 1
 fi
+
+"$KWRITE" --file kdeglobals --group General --key ColorScheme "BreezeDark"
+"$KWRITE" --file kdeglobals --group KDE --key widgetStyle "Breeze"
+"$KWRITE" --file kdeglobals --group Icons --key Theme "breeze-dark"
+"$KWRITE" --file plasmarc --group Theme --key name "default"
+"$KWRITE" --file kwinrc --group org.kde.kdecoration2 --key theme "Breeze"
+"$KWRITE" --file kwinrc --group Plugins --key blurEnabled true
+"$KWRITE" --file kwinrc --group Plugins --key translucencyEnabled true
+"$KWRITE" --file kwinrc --group Compositing --key Enabled true
+"$KWRITE" --file kwinrc --group Compositing --key Backend OpenGL
+"$KWRITE" --file kwinrc --group Compositing --key GLCore true
+
+if command -v qdbus >/dev/null 2>&1; then
+    qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+fi
+
+pkill plasmashell >/dev/null 2>&1 || true
+nohup plasmashell >/dev/null 2>&1 &
+EOF
+
+chmod +x "$THEME"
+"$THEME"
