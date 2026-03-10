@@ -29,7 +29,7 @@ install_pkg() {
     local pkg="$1"
     if ! command -v "$pkg" >/dev/null 2>&1; then
         echo "Installing $pkg..."
-        nix-env -iA "nixpkgs.$pkg" || echo "Failed to install $pkg"
+        nix-env -iA "nixpkgs.$pkg" || true
     else
         echo "$pkg already installed"
     fi
@@ -46,12 +46,13 @@ download_file() {
         curl -L "$url" -o "$out"
     else
         echo "Neither wget nor curl is installed."
+        echo "Try running with nix-shell -p wget"
         exit 1
     fi
 }
 
-install_pkg wget
 install_pkg curl
+install_pkg wget
 install_pkg fastfetch
 install_pkg feh
 
@@ -59,7 +60,7 @@ download_file "$BACKGROUND_URL" "$BACKGROUND_FILE"
 download_file "$BOOT_LOGO_URL" "$BOOT_LOGO_FILE"
 download_file "$WHITE_LOGO_URL" "$WHITE_LOGO_FILE"
 
-echo "Writing fastfetch ASCII..."
+echo "Writing Fastfetch ASCII..."
 cat > "$ASCII_FILE" <<'EOF'
                                            
                                  @@% #     
@@ -80,7 +81,7 @@ cat > "$ASCII_FILE" <<'EOF'
                @@@        @@@              
 EOF
 
-echo "Writing fastfetch config..."
+echo "Writing Fastfetch config..."
 cat > "$FASTFETCH_CONFIG" <<EOF
 {
   "logo": {
@@ -120,6 +121,10 @@ fi
 
 echo "Writing /etc/os-release..."
 if [ "$(id -u)" -eq 0 ]; then
+    if [ -L /etc/os-release ] || [ -e /etc/os-release ]; then
+        rm -f /etc/os-release || true
+    fi
+
     cat > /etc/os-release <<'EOF'
 ANSI_COLOR="0;35"
 BUG_REPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
@@ -144,10 +149,11 @@ VERSION="0.1 RELEASE (Elite)"
 VERSION_CODENAME="Elite"
 VERSION_ID="0.1"
 EOF
+
     echo "Wrote /etc/os-release"
 else
     echo "Not running as root, so /etc/os-release was not changed."
-    echo "Run this script with sudo to write the OS identity."
+    echo "Run this script with sudo."
 fi
 
 echo "Setting hostname..."
