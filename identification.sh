@@ -9,8 +9,11 @@ fi
 CONFIG="/etc/nixos/configuration.nix"
 SAKURA_DIR="/etc/nixos/sakura"
 MODULE="$SAKURA_DIR/system.nix"
-
 BACKUP="/etc/nixos/configuration.nix.bak.$(date +%s)"
+
+USER_NAME="${SUDO_USER:-$(logname)}"
+USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+USER_GROUP="$(id -gn "$USER_NAME")"
 
 mkdir -p "$SAKURA_DIR"
 
@@ -89,19 +92,19 @@ else
   sed -i '/imports *= *\[/a\      ./sakura/system.nix' "$CONFIG"
 fi
 
-echo "Creating Fastfetch config..."
-
-USER_HOME=$(eval echo "~$SUDO_USER")
+echo "Installing Fastfetch config..."
 
 mkdir -p "$USER_HOME/.config/fastfetch"
 
 cat > "$USER_HOME/.config/fastfetch/ascii.txt" <<'EOF'
-          .-.
-       .-(   )-.
-      /   Sakura \
-     |  🌸  OS   |
-      \         /
-       `-.___.-'
+      🌸 Sakura OS 🌸
+
+       _.-'`'-._
+     .'  Sakura  '.
+    /   🌸     🌸   \
+   |      OS        |
+    \               /
+     `-._________.-`
 EOF
 
 cat > "$USER_HOME/.config/fastfetch/config.jsonc" <<'EOF'
@@ -134,14 +137,14 @@ cat > "$USER_HOME/.config/fastfetch/config.jsonc" <<'EOF'
 }
 EOF
 
-chown -R "$SUDO_USER":"$SUDO_USER" "$USER_HOME/.config"
+chown -R "$USER_NAME":"$USER_GROUP" "$USER_HOME/.config/fastfetch"
 
-echo "Rebuilding system..."
+echo "Rebuilding NixOS..."
 
 if nixos-rebuild switch; then
   echo "Build successful"
 else
-  echo "Build failed, restoring backup"
+  echo "Build failed — restoring backup"
   cp "$BACKUP" "$CONFIG"
   exit 1
 fi
