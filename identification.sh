@@ -8,7 +8,8 @@ fi
 
 CONFIG="/etc/nixos/configuration.nix"
 SAKURA_DIR="/etc/nixos/sakura"
-SYSTEM_NIX="$SAKURA_DIR/system.nix"
+MODULE="$SAKURA_DIR/system.nix"
+
 BACKUP="/etc/nixos/configuration.nix.bak.$(date +%s)"
 
 mkdir -p "$SAKURA_DIR"
@@ -16,26 +17,36 @@ mkdir -p "$SAKURA_DIR"
 echo "Backing up configuration.nix..."
 cp "$CONFIG" "$BACKUP"
 
-echo "Creating Sakura module..."
+echo "Writing Sakura module..."
 
-cat > "$SYSTEM_NIX" <<'EOF'
+cat > "$MODULE" <<'EOF'
 { config, pkgs, lib, ... }:
 
+let
+  wallpaper = pkgs.fetchurl {
+    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png";
+    sha256 = lib.fakeSha256;
+  };
+
+  startIcon = pkgs.fetchurl {
+    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/logo.png";
+    sha256 = lib.fakeSha256;
+  };
+in
 {
+
   networking.hostName = "sakura";
 
   environment.systemPackages = with pkgs; [
     fastfetch
-    feh
     curl
     wget
+    feh
   ];
 
-  # Store wallpaper in the Nix store and link it
-  environment.etc."sakura/background.png".source = pkgs.fetchurl {
-    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png";
-    sha256 = lib.fakeSha256;
-  };
+  environment.etc."sakura/background.png".source = wallpaper;
+
+  environment.etc."xdg/icons/hicolor/scalable/apps/start-here.svg".source = startIcon;
 
   environment.etc."os-release".text = lib.mkForce ''
 NAME="Sakura"
@@ -53,10 +64,22 @@ SUPPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
 BUG_REPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
 DEFAULT_HOSTNAME="sakura"
 '';
+
+  systemd.user.services.set-wallpaper = {
+    description = "Set Sakura wallpaper";
+
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${pkgs.plasma-workspace}/bin/plasma-apply-wallpaperimage /etc/sakura/background.png";
+    };
+
+    wantedBy = [ "graphical-session.target" ];
+  };
+
 }
 EOF
 
-echo "Checking if Sakura import exists..."
+echo "Checking Sakura import..."
 
 if grep -q "./sakura/system.nix" "$CONFIG"; then
   echo "Import already exists."
@@ -66,24 +89,71 @@ else
   sed -i '/imports *= *\[/a\      ./sakura/system.nix' "$CONFIG"
 fi
 
-echo "Rebuilding NixOS..."
+echo "Creating Fastfetch config..."
+
+USER_HOME=$(eval echo "~$SUDO_USER")
+
+mkdir -p "$USER_HOME/.config/fastfetch"
+
+cat > "$USER_HOME/.config/fastfetch/ascii.txt" <<'EOF'
+          .-.
+       .-(   )-.
+      /   Sakura \
+     |  🌸  OS   |
+      \         /
+       `-.___.-'
+EOF
+
+cat > "$USER_HOME/.config/fastfetch/config.jsonc" <<'EOF'
+{
+  "logo": {
+    "type": "file",
+    "source": "~/.config/fastfetch/ascii.txt"
+  },
+
+  "modules": [
+    "title",
+    "separator",
+    "os",
+    "host",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "de",
+    "wm",
+    "terminal",
+    "cpu",
+    "gpu",
+    "memory",
+    "disk",
+    "localip",
+    "battery",
+    "locale"
+  ]
+}
+EOF
+
+chown -R "$SUDO_USER":"$SUDO_USER" "$USER_HOME/.config"
+
+echo "Rebuilding system..."
 
 if nixos-rebuild switch; then
-  echo "Build succeeded."
+  echo "Build successful"
 else
-  echo "Build failed. Restoring backup."
+  echo "Build failed, restoring backup"
   cp "$BACKUP" "$CONFIG"
   exit 1
 fi
 
 echo
-echo "================================="
-echo " Sakura OS Installed 🌸"
-echo "================================="
+echo "=================================="
+echo " Sakura OS branding installed 🌸"
+echo "=================================="
 echo
-echo "Hostname set to: sakura"
-echo "Fastfetch installed permanently"
-echo "Wallpaper stored at:"
-echo "/etc/sakura/background.png"
+echo "Hostname: sakura"
+echo "Fastfetch configured"
+echo "Wallpaper auto-applies on login"
+echo "Start menu icon installed"
 echo
-echo "Set it in KDE once and it will persist."
+echo "Log out and back in to see changes."
