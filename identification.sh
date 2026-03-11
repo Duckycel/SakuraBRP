@@ -9,35 +9,24 @@ fi
 CONFIG="/etc/nixos/configuration.nix"
 SAKURA_DIR="/etc/nixos/sakura"
 SYSTEM_NIX="$SAKURA_DIR/system.nix"
+WALL_SCRIPT="$SAKURA_DIR/set-wallpaper.sh"
+
 TIMESTAMP="$(date +%s)"
 BACKUP="/etc/nixos/configuration.nix.bak.$TIMESTAMP"
-TMP="$(mktemp)"
-TMP2="$(mktemp)"
 
 mkdir -p "$SAKURA_DIR"
 
-validate_config() {
-  nix-instantiate --parse "$CONFIG" >/dev/null 2>&1
-}
+echo "Creating Sakura system module..."
 
-restore_latest_backup() {
-  local latest
-  latest="$(ls -1t /etc/nixos/configuration.nix.bak.* 2>/dev/null | head -n 1 || true)"
-  if [ -n "$latest" ] && [ -f "$latest" ]; then
-    echo "Current configuration.nix is broken."
-    echo "Restoring latest backup: $latest"
-    cp "$latest" "$CONFIG"
-  else
-    echo "Current configuration.nix is broken, and no backup was found."
-    echo "Please fix /etc/nixos/configuration.nix manually first."
-    exit 1
-  fi
-}
-
-echo "Writing Sakura system module..."
 cat > "$SYSTEM_NIX" <<'EOF'
 { config, pkgs, lib, ... }:
 
+let
+  sakuraWallpaper = pkgs.fetchurl {
+    url = "https://raw.githubusercontent.com/Duckycel/SakuraBRP/main/background.png";
+    sha256 = "0000000000000000000000000000000000000000000000000000";
+  };
+in
 {
   networking.hostName = "sakura";
 
@@ -48,111 +37,91 @@ cat > "$SYSTEM_NIX" <<'EOF'
     wget
   ];
 
+  environment.etc."sakura-wallpaper.png".source = sakuraWallpaper;
+
   environment.etc."os-release".text = lib.mkForce ''
-    ANSI_COLOR="0;35"
-    BUG_REPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
-    BUILD_ID="0.1"
-    CPE_NAME="cpe:/o:sakura:sakura_os:0.1"
-    DEFAULT_HOSTNAME="sakura"
-    HOME_URL="https://github.com/Duckycel/SakuraBRP"
-    ID="sakura"
-    ID_LIKE=""
-    IMAGE_ID="sakura"
-    IMAGE_VERSION="0.1"
-    LOGO="sakura"
     NAME="Sakura"
     PRETTY_NAME="Sakura OS 0.1 RELEASE (Elite)"
-    SUPPORT_END="2026-06-30"
-    SUPPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
-    VARIANT="Elite"
-    VARIANT_ID="elite"
-    VENDOR_NAME="Sakura Project"
-    VENDOR_URL="https://github.com/Duckycel/SakuraBRP"
+    ID="sakura"
+    VERSION_ID="0.1"
     VERSION="0.1 RELEASE (Elite)"
     VERSION_CODENAME="Elite"
-    VERSION_ID="0.1"
+    BUILD_ID="0.1"
+    VARIANT="Elite"
+    VARIANT_ID="elite"
+    ANSI_COLOR="0;35"
+    HOME_URL="https://github.com/Duckycel/SakuraBRP"
+    SUPPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
+    BUG_REPORT_URL="https://github.com/Duckycel/SakuraBRP/issues"
+    DEFAULT_HOSTNAME="sakura"
   '';
 }
 EOF
 
-echo "Checking existing configuration.nix..."
-if ! validate_config; then
-  restore_latest_backup
-fi
+echo "Creating KDE wallpaper script..."
 
-if ! validate_config; then
-  echo "configuration.nix is still invalid after restore."
-  echo "Please repair it manually, then rerun this script."
-  exit 1
-fi
+cat > "$WALL_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
 
-echo "Backing up current configuration.nix to $BACKUP"
+sleep 3
+
+qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
+var Desktops = desktops();
+for (i=0;i<Desktops.length;i++) {
+  d = Desktops[i];
+  d.wallpaperPlugin = 'org.kde.image';
+  d.currentConfigGroup = Array('Wallpaper','org.kde.image','General');
+  d.writeConfig('Image','file:///etc/sakura-wallpaper.png');
+}
+"
+EOF
+
+chmod +x "$WALL_SCRIPT"
+
+echo "Backing up configuration.nix..."
 cp "$CONFIG" "$BACKUP"
 
-echo "Cleaning duplicate Sakura import lines..."
+echo "Removing duplicate Sakura imports..."
+
+grep -v "./sakura/system.nix" "$CONFIG" > "$CONFIG.tmp"
+mv "$CONFIG.tmp" "$CONFIG"
+
+echo "Adding Sakura import..."
+
 awk '
-{
-  if ($0 ~ /[.]\/sakura\/system[.]nix/) next
+BEGIN {added=0}
+/imports *= *\[/ {
   print
+  print "      ./sakura/system.nix"
+  added=1
+  next
 }
-' "$CONFIG" > "$TMP"
-mv "$TMP" "$CONFIG"
-
-echo "Inserting Sakura import into the main imports block..."
-awk '
-BEGIN {
-  in_imports = 0
-  inserted = 0
-}
-{
-  if ($0 ~ /^[[:space:]]*imports[[:space:]]*=/) {
-    in_imports = 1
-    print
-    next
-  }
-
-  if (in_imports == 1) {
-    if ($0 ~ /^[[:space:]]*\];/) {
-      print "      ./sakura/system.nix"
-      print
-      inserted = 1
-      in_imports = 0
-      next
-    }
-    print
-    next
-  }
-
-  print
-}
+{print}
 END {
-  if (inserted == 0) {
-    exit 2
-  }
+ if (added==0) {
+   print "ERROR: Could not find imports block."
+   exit 1
+ }
 }
-' "$CONFIG" > "$TMP2" || {
-  rm -f "$TMP" "$TMP2"
-  echo "Could not find an imports block in configuration.nix."
-  echo "Add this manually inside your existing imports list:"
-  echo "  ./sakura/system.nix"
-  exit 1
-}
-mv "$TMP2" "$CONFIG"
+' "$CONFIG" > "$CONFIG.tmp"
 
-echo "Validating edited configuration.nix..."
-if ! validate_config; then
-  echo "Edited configuration.nix is invalid. Restoring backup."
-  cp "$BACKUP" "$CONFIG"
-  rm -f "$TMP" "$TMP2"
-  exit 1
-fi
+mv "$CONFIG.tmp" "$CONFIG"
 
 echo "Rebuilding NixOS..."
+
 nixos-rebuild switch
 
-rm -f "$TMP" "$TMP2"
+echo "Setting wallpaper..."
+
+sudo -u "${SUDO_USER:-$USER}" "$WALL_SCRIPT" || true
 
 echo
-echo "Done."
-echo "Sakura system module written to: $SYSTEM_NIX"
-echo "Backup saved to: $BACKUP"
+echo "======================================="
+echo " Sakura OS setup complete 🌸"
+echo "======================================="
+echo
+echo "Hostname: sakura"
+echo "Fastfetch installed"
+echo "Wallpaper applied"
+echo
+echo "Logout/login if wallpaper didn't update."
